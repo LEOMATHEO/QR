@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0ea5e9" />
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <title>Leitor PWA — QR & Código de Barras</title>
+  <style>
+    :root { --bg:#ffffff; --fg:#0f172a; --muted:#475569; --brand:#0ea5e9; }
+    html,body{height:100%}
+    body{margin:0;font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;background:var(--bg);color:var(--fg);}
+    header{position:sticky;top:0;background:#e6f6fe;padding:12px 16px;border-bottom:1px solid #bae6fd;z-index:10}
+    header h1{margin:0;font-weight:700;font-size:18px}
+    .container{max-width:900px;margin:0 auto;padding:16px}
+    .card{border:1px solid #e2e8f0;border-radius:16px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .row > * {flex:1}
+    video{width:100%;border-radius:12px;background:#000;min-height:240px}
+    select, input, button{border:1px solid #cbd5e1;border-radius:12px;padding:10px 12px;font-size:14px}
+    button{cursor:pointer;background:var(--brand);color:#fff;border:none;font-weight:600}
+    button.secondary{background:#0f172a}
+    button.ghost{background:#fff;color:var(--fg);border:1px solid #cbd5e1}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    table{width:100%;border-collapse:collapse;margin-top:12px;font-size:14px}
+    th, td{border-bottom:1px solid #e2e8f0;padding:8px;text-align:left;vertical-align:top}
+    th{background:#f8fafc;position:sticky;top:0}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#e2e8f0;color:#334155;font-size:12px}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#fff}
+    .muted{color:var(--muted)}
+    footer{color:#64748b;font-size:12px;margin-top:16px;text-align:center}
+    .hint{font-size:12px;color:#64748b}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Leitor QR & Barras (PWA)</h1>
+  </header>
+  <div class="container">
+    <div class="card">
+      <div class="row">
+        <div style="flex:2">
+          <video id="preview" playsinline muted></video>
+          <div class="toolbar">
+            <button id="btnStart">Iniciar câmera</button>
+            <button id="btnStop" class="ghost" disabled>Parar</button>
+            <button id="btnScanOnce" class="secondary" disabled>Escanear 1x</button>
+            <button id="btnToggle" disabled>Contínuo: OFF</button>
+            <button id="btnTorch" class="ghost" disabled>Lanterna</button>
+          </div>
+          <div class="hint">Dica: em iPhone, adicione à tela inicial para experiência PWA completa.</div>
+        </div>
+        <div style="flex:1;min-width:260px">
+          <label class="muted">Câmera</label>
+          <select id="deviceSelect"></select>
+          <label class="muted">Formato alvo (opcional)</label>
+          <select id="formatSelect">
+            <option value="">Qualquer (auto)</option>
+            <option>QR_CODE</option>
+            <option>EAN_13</option>
+            <option>EAN_8</option>
+            <option>CODE_128</option>
+            <option>CODE_39</option>
+            <option>ITF</option>
+            <option>PDF_417</option>
+            <option>AZTEC</option>
+            <option>DATA_MATRIX</option>
+            <option>UPC_A</option>
+            <option>UPC_E</option>
+          </select>
+          <div style="margin-top:8px" class="pill">
+            <span id="statusDot" style="width:8px;height:8px;background:#94a3b8;border-radius:50%"></span>
+            <span id="statusText">Aguardando…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="toolbar">
+        <button id="btnExportCSV" class="ghost">Exportar CSV</button>
+        <button id="btnExportXLSX" class="ghost">Exportar Excel (.xlsx)</button>
+        <button id="btnClear" class="ghost">Limpar</button>
+      </div>
+      <table id="resultTable">
+        <thead>
+          <tr>
+            <th>Data/Hora</th>
+            <th>Tipo</th>
+            <th>Conteúdo</th>
+            <th>Dispositivo</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="hint">Os dados ficam somente no seu dispositivo (localStorage). Perfeito para uso offline.</div>
+    </div>
+
+    <footer>Instalável como PWA • Funciona no navegador móvel • Compatível com QR e vários padrões de barras via ZXing</footer>
+  </div>
+
+  <!-- ZXing (leitura QR/códigos) -->
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
+  <!-- SheetJS para exportar Excel -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <script>
+  const video = document.getElementById('preview');
+  const deviceSelect = document.getElementById('deviceSelect');
+  const formatSelect = document.getElementById('formatSelect');
+  const btnStart = document.getElementById('btnStart');
+  const btnStop = document.getElementById('btnStop');
+  const btnScanOnce = document.getElementById('btnScanOnce');
+  const btnToggle = document.getElementById('btnToggle');
+  const btnTorch = document.getElementById('btnTorch');
+  const btnExportCSV = document.getElementById('btnExportCSV');
+  const btnExportXLSX = document.getElementById('btnExportXLSX');
+  const btnClear = document.getElementById('btnClear');
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  const tbody = document.querySelector('#resultTable tbody');
+
+  const codeReader = new ZXing.BrowserMultiFormatReader();
+  let currentDeviceId = null;
+  let stream = null;
+  let scanning = false;
+  let continuous = false;
+  let torchOn = false;
+  let imageCapture = null;
+  let deviceLabel = '';
+
+  // PWA
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js');
+    });
+  }
+
+  function setStatus(txt, color){
+    statusText.textContent = txt;
+    statusDot.style.background = color || '#22c55e';
+  }
+
+  function loadSaved(){
+    const saved = JSON.parse(localStorage.getItem('scans') || '[]');
+    saved.forEach(addRow);
+  }
+
+  function saveAll(){
+    const rows = Array.from(tbody.querySelectorAll('tr')).map(tr => ({
+      ts: tr.children[0].textContent,
+      format: tr.children[1].textContent,
+      text: tr.children[2].textContent,
+      device: tr.children[3].textContent,
+    }));
+    localStorage.setItem('scans', JSON.stringify(rows));
+  }
+
+  function addRow(obj){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${obj.ts}</td><td><span class="badge">${obj.format}</span></td><td>${obj.text}</td><td>${obj.device||''}</td>`;
+    tbody.prepend(tr);
+    saveAll();
+  }
+
+  async function listCameras(){
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputs = devices.filter(d => d.kind === 'videoinput');
+    deviceSelect.innerHTML = '';
+    videoInputs.forEach((d, i) => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Câmera ${i+1}`;
+      deviceSelect.appendChild(opt);
+    });
+    if (videoInputs.length){
+      // prioriza traseira se existir (label contém 'back')
+      const back = videoInputs.find(d => /back|traseira|rear/i.test(d.label));
+      deviceSelect.value = (back && back.deviceId) || videoInputs[0].deviceId;
+      currentDeviceId = deviceSelect.value;
+      deviceLabel = videoInputs.find(v=>v.deviceId===currentDeviceId)?.label || '';
+    }
+  }
+
+  async function start(){
+    try{
+      await listCameras();
+      currentDeviceId = deviceSelect.value;
+      const constraints = {
+        audio: false,
+        video: {
+          deviceId: currentDeviceId ? { exact: currentDeviceId } : undefined,
+          facingMode: 'environment',
+        }
+      };
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      await video.play();
+      btnStop.disabled = false;
+      btnScanOnce.disabled = false;
+      btnToggle.disabled = false;
+      setStatus('Câmera ativa', '#22c55e');
+
+      // Torch (quando suportado)
+      const track = stream.getVideoTracks()[0];
+      try {
+        imageCapture = new ImageCapture(track);
+        const cap = await track.getCapabilities?.();
+        if (cap && cap.torch !== undefined){
+          btnTorch.disabled = false;
+        } else {
+          btnTorch.disabled = true;
+        }
+      } catch(e){
+        btnTorch.disabled = true;
+      }
+    } catch(err){
+      console.error(err);
+      setStatus('Permissão negada ou erro na câmera', '#ef4444');
+      alert('Erro ao acessar a câmera. Verifique permissões/HTTPS.');
+    }
+  }
+
+  async function stop(){
+    continuous = false;
+    btnToggle.textContent = 'Contínuo: OFF';
+    if (stream){
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+    codeReader.reset();
+    btnStop.disabled = true;
+    btnScanOnce.disabled = true;
+    btnToggle.disabled = true;
+    btnTorch.disabled = true;
+    setStatus('Parado', '#94a3b8');
+  }
+
+  async function scanOnce(){
+    if (!stream){ return alert('Inicie a câmera primeiro.'); }
+    try{
+      const hints = new Map();
+      const desired = formatSelect.value;
+      if (desired){
+        const formats = ZXing.BarcodeFormat;
+        const keys = Object.keys(formats);
+        const matchKey = keys.find(k => k === desired);
+        if (matchKey){
+          hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [formats[matchKey]]);
+        }
+      }
+      const result = await codeReader.decodeOnceFromVideoDevice(currentDeviceId, 'preview', hints);
+      handleResult(result);
+      codeReader.reset();
+    }catch(e){
+      console.warn('Sem leitura, tente aproximar/iluminar.');
+    }
+  }
+
+  function handleResult(result){
+    if (!result) return;
+    const now = new Date();
+    const row = {
+      ts: now.toLocaleString(),
+      format: result.getBarcodeFormat ? String(result.getBarcodeFormat()) : (result.format || 'DESCONHECIDO'),
+      text: result.getText ? result.getText() : (result.text || ''),
+      device: deviceLabel
+    };
+    // evitar duplicatas consecutivas em contínuo
+    const lastText = tbody.querySelector('tr td:nth-child(3)')?.textContent || '';
+    if (continuous && row.text && row.text === lastText){ return; }
+    addRow(row);
+    // feedback
+    try { navigator.vibrate && navigator.vibrate(50); } catch{}
+    try { new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABYAAAAAAACAgICAgA==').play(); } catch{}
+  }
+
+  async function loop(){
+    if (!continuous) return;
+    try{
+      const result = await codeReader.decodeOnceFromVideoDevice(currentDeviceId, 'preview');
+      handleResult(result);
+    }catch(e){
+      // ignore; tenta de novo
+    }finally{
+      if (continuous) requestAnimationFrame(loop);
+    }
+  }
+
+  deviceSelect.addEventListener('change', async () => {
+    currentDeviceId = deviceSelect.value;
+    if (stream){ await stop(); await start(); }
+  });
+
+  btnStart.addEventListener('click', start);
+  btnStop.addEventListener('click', stop);
+  btnScanOnce.addEventListener('click', scanOnce);
+
+  btnToggle.addEventListener('click', () => {
+    if (!stream){ return alert('Inicie a câmera primeiro.'); }
+    continuous = !continuous;
+    btnToggle.textContent = 'Contínuo: ' + (continuous ? 'ON' : 'OFF');
+    if (continuous){ loop(); }
+  });
+
+  btnTorch.addEventListener('click', async () => {
+    if (!stream || !imageCapture) return;
+    try{
+      const track = stream.getVideoTracks()[0];
+      const cap = track.getCapabilities?.() || {};
+      if (!('torch' in cap)) return alert('Lanterna não suportada neste dispositivo.');
+      torchOn = !torchOn;
+      await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+    }catch(e){
+      alert('Não foi possível alternar a lanterna neste dispositivo.');
+    }
+  });
+
+  btnExportCSV.addEventListener('click', () => {
+    const rows = [['Data/Hora','Tipo','Conteúdo','Dispositivo']];
+    tbody.querySelectorAll('tr').forEach(tr => {
+      rows.push([
+        tr.children[0].textContent,
+        tr.children[1].textContent,
+        tr.children[2].textContent,
+        tr.children[3].textContent
+      ]);
+    });
+    const csv = rows.map(r => r.map(x => `"${(x||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'leituras.csv';
+    a.click();
+  });
+
+  btnExportXLSX.addEventListener('click', () => {
+    const data = [];
+    tbody.querySelectorAll('tr').forEach(tr => {
+      data.push({
+        'Data/Hora': tr.children[0].textContent,
+        'Tipo': tr.children[1].textContent,
+        'Conteúdo': tr.children[2].textContent,
+        'Dispositivo': tr.children[3].textContent,
+      });
+    });
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(data);
+    XLSX.utils.book_append_sheet(wb, ws, 'Leituras');
+    XLSX.writeFile(wb, 'leituras.xlsx');
+  });
+
+  btnClear.addEventListener('click', () => {
+    tbody.innerHTML = '';
+    saveAll();
+  });
+
+  loadSaved();
+  </script>
+</body>
+</html>
